@@ -2792,25 +2792,6 @@ public interface Guild extends IGuildChannelContainer<GuildChannel>, ISnowflake,
     RestAction<Void> delete(@Nullable String mfaCode);
 
     /**
-     * The {@link net.dv8tion.jda.api.managers.AudioManager AudioManager} that represents the
-     * audio connection for this Guild.
-     * <br>If no AudioManager exists for this Guild, this will create a new one.
-     * <br>This operation is synchronized on all audio managers for this JDA instance,
-     * this means that calling getAudioManager() on any other guild while a thread is accessing this method may be locked.
-     *
-     * @throws IllegalStateException
-     *         If {@link GatewayIntent#GUILD_VOICE_STATES} is disabled
-     * @throws net.dv8tion.jda.api.exceptions.DetachedEntityException
-     *         If this entity is {@link #isDetached() detached}
-     *
-     * @return The AudioManager for this Guild.
-     *
-     * @see    net.dv8tion.jda.api.JDA#getAudioManagerCache() JDA.getAudioManagerCache()
-     */
-    @Nonnull
-    AudioManager getAudioManager();
-
-    /**
      * Once the currently logged in account is connected to a {@link StageChannel},
      * this will trigger a {@link GuildVoiceState#getRequestToSpeakTimestamp() Request-to-Speak} (aka raise your hand).
      *

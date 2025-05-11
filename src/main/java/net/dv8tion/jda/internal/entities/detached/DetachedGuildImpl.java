@@ -686,13 +686,6 @@ public class DetachedGuildImpl implements Guild, IDetachableEntityMixin
 
     @Nonnull
     @Override
-    public AudioManager getAudioManager()
-    {
-        throw detachedException();
-    }
-
-    @Nonnull
-    @Override
     public synchronized Task<Void> requestToSpeak()
     {
         throw detachedException();

@@ -16,33 +16,27 @@
 
 package net.dv8tion.jda.internal.handle;
 
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Optional;
+
+import javax.annotation.Nullable;
+
 import gnu.trove.iterator.TLongIterator;
 import gnu.trove.iterator.TLongObjectIterator;
 import gnu.trove.map.TLongObjectMap;
 import gnu.trove.map.hash.TLongObjectHashMap;
 import gnu.trove.set.TLongSet;
 import gnu.trove.set.hash.TLongHashSet;
-import net.dv8tion.jda.api.audio.hooks.ConnectionListener;
-import net.dv8tion.jda.api.audio.hooks.ConnectionStatus;
-import net.dv8tion.jda.api.entities.channel.concrete.VoiceChannel;
 import net.dv8tion.jda.api.events.guild.GuildAvailableEvent;
 import net.dv8tion.jda.api.events.guild.GuildJoinEvent;
 import net.dv8tion.jda.api.events.guild.GuildReadyEvent;
 import net.dv8tion.jda.api.events.guild.UnavailableGuildJoinedEvent;
-import net.dv8tion.jda.api.managers.AudioManager;
 import net.dv8tion.jda.api.utils.data.DataArray;
 import net.dv8tion.jda.api.utils.data.DataObject;
 import net.dv8tion.jda.internal.JDAImpl;
 import net.dv8tion.jda.internal.entities.GuildImpl;
-import net.dv8tion.jda.internal.managers.AudioManagerImpl;
 import net.dv8tion.jda.internal.utils.EntityString;
-import net.dv8tion.jda.internal.utils.UnlockHook;
-import net.dv8tion.jda.internal.utils.cache.AbstractCacheView;
-
-import javax.annotation.Nullable;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Optional;
 
 public class GuildSetupNode
 {
@@ -358,7 +352,6 @@ public class GuildSetupNode
             members.remove(it.next());
         removedMembers.clear();
         GuildImpl guild = api.getEntityBuilder().createGuild(id, partialGuild, members, expectedMemberCount);
-        updateAudioManagerReference(guild);
         switch (type)
         {
         case AVAILABLE:
@@ -413,48 +406,6 @@ public class GuildSetupNode
             updateStatus(GuildSetupController.Status.CHUNKING);
             getController().addGuildForChunking(id, isJoin());
             requestedChunk = true;
-        }
-    }
-
-    private void updateAudioManagerReference(GuildImpl guild)
-    {
-        JDAImpl api = getController().getJDA();
-        AbstractCacheView<AudioManager> managerView = api.getAudioManagersView();
-        try (UnlockHook hook = managerView.writeLock())
-        {
-            TLongObjectMap<AudioManager> audioManagerMap = managerView.getMap();
-            AudioManagerImpl mng = (AudioManagerImpl) audioManagerMap.get(id);
-            if (mng == null)
-                return;
-            ConnectionListener listener = mng.getConnectionListener();
-            final AudioManagerImpl newMng = new AudioManagerImpl(guild);
-            newMng.setSelfMuted(mng.isSelfMuted());
-            newMng.setSelfDeafened(mng.isSelfDeafened());
-            newMng.setQueueTimeout(mng.getConnectTimeout());
-            newMng.setSendingHandler(mng.getSendingHandler());
-            newMng.setReceivingHandler(mng.getReceivingHandler());
-            newMng.setConnectionListener(listener);
-            newMng.setAutoReconnect(mng.isAutoReconnect());
-
-            if (mng.isConnected())
-            {
-                final long channelId = mng.getConnectedChannel().getIdLong();
-
-                final VoiceChannel channel = api.getVoiceChannelById(channelId);
-                if (channel != null)
-                {
-                    if (mng.isConnected())
-                        mng.closeAudioConnection(ConnectionStatus.ERROR_CANNOT_RESUME);
-                }
-                else
-                {
-                    //The voice channel is not cached. It was probably deleted.
-                    api.getClient().removeAudioConnection(id);
-                    if (listener != null)
-                        listener.onStatusChange(ConnectionStatus.DISCONNECTED_CHANNEL_DELETED);
-                }
-            }
-            audioManagerMap.put(id, newMng);
         }
     }
 

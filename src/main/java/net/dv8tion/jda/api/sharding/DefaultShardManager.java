@@ -554,9 +554,6 @@ public class DefaultShardManager implements ShardManager
         if (eventConfig.getEventManagerProvider() != null)
             jda.setEventManager(this.eventConfig.getEventManagerProvider().apply(shardId));
 
-        if (this.sessionConfig.getAudioSendFactory() != null)
-            jda.setAudioSendFactory(this.sessionConfig.getAudioSendFactory());
-
         jda.addEventListener(this.eventConfig.getListeners().toArray());
         this.eventConfig.getListenerProviders().forEach(provider -> jda.addEventListener(provider.apply(shardId)));
 

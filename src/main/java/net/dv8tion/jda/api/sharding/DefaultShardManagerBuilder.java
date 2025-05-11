@@ -15,15 +15,36 @@
  */
 package net.dv8tion.jda.api.sharding;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.function.IntFunction;
+import java.util.stream.Collectors;
+
+import javax.annotation.CheckReturnValue;
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
+
 import com.neovisionaries.ws.client.WebSocketFactory;
+
 import net.dv8tion.jda.api.GatewayEncoding;
 import net.dv8tion.jda.api.OnlineStatus;
-import net.dv8tion.jda.api.audio.factory.IAudioSendFactory;
 import net.dv8tion.jda.api.entities.Activity;
 import net.dv8tion.jda.api.events.Event;
 import net.dv8tion.jda.api.exceptions.InvalidTokenException;
 import net.dv8tion.jda.api.hooks.IEventManager;
-import net.dv8tion.jda.api.hooks.VoiceDispatchInterceptor;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 import net.dv8tion.jda.api.requests.RestAction;
 import net.dv8tion.jda.api.requests.RestConfig;
@@ -37,16 +58,13 @@ import net.dv8tion.jda.internal.utils.Checks;
 import net.dv8tion.jda.internal.utils.concurrent.CountingThreadFactory;
 import net.dv8tion.jda.internal.utils.config.flags.ConfigFlag;
 import net.dv8tion.jda.internal.utils.config.flags.ShardingConfigFlag;
-import net.dv8tion.jda.internal.utils.config.sharding.*;
+import net.dv8tion.jda.internal.utils.config.sharding.EventConfig;
+import net.dv8tion.jda.internal.utils.config.sharding.PresenceProviderConfig;
+import net.dv8tion.jda.internal.utils.config.sharding.ShardingConfig;
+import net.dv8tion.jda.internal.utils.config.sharding.ShardingMetaConfig;
+import net.dv8tion.jda.internal.utils.config.sharding.ShardingSessionConfig;
+import net.dv8tion.jda.internal.utils.config.sharding.ThreadingProviderConfig;
 import okhttp3.OkHttpClient;
-
-import javax.annotation.CheckReturnValue;
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.function.IntFunction;
-import java.util.stream.Collectors;
 
 /**
  * Used to create new instances of JDA's default {@link net.dv8tion.jda.api.sharding.ShardManager ShardManager} implementation.
@@ -64,7 +82,6 @@ public class  DefaultShardManagerBuilder
     protected final List<IntFunction<Object>> listenerProviders = new ArrayList<>();
     protected final EnumSet<CacheFlag> automaticallyDisabled = EnumSet.noneOf(CacheFlag.class);
     protected SessionController sessionController = null;
-    protected VoiceDispatchInterceptor voiceDispatchInterceptor = null;
     protected EnumSet<CacheFlag> cacheFlags = EnumSet.allOf(CacheFlag.class);
     protected EnumSet<ConfigFlag> flags = ConfigFlag.getDefault();
     protected EnumSet<ShardingConfigFlag> shardingFlags = ShardingConfigFlag.getDefault();
@@ -106,7 +123,6 @@ public class  DefaultShardManagerBuilder
     protected OkHttpClient.Builder httpClientBuilder = null;
     protected OkHttpClient httpClient = null;
     protected WebSocketFactory wsFactory = null;
-    protected IAudioSendFactory audioSendFactory = null;
     protected ThreadFactory threadFactory = null;
     protected ChunkingFilter chunkingFilter = ChunkingFilter.ALL;
     protected MemberCachePolicy memberCachePolicy = MemberCachePolicy.ALL;
@@ -762,25 +778,6 @@ public class  DefaultShardManagerBuilder
     }
 
     /**
-     * Configures a custom voice dispatch handler which handles audio connections.
-     *
-     * @param  interceptor
-     *         The new voice dispatch handler, or null to use the default
-     *
-     * @return The DefaultShardManagerBuilder instance. Useful for chaining.
-     *
-     * @since  4.0.0
-     *
-     * @see    VoiceDispatchInterceptor
-     */
-    @Nonnull
-    public DefaultShardManagerBuilder setVoiceDispatchInterceptor(@Nullable VoiceDispatchInterceptor interceptor)
-    {
-        this.voiceDispatchInterceptor = interceptor;
-        return this;
-    }
-
-    /**
      * Sets the {@link org.slf4j.MDC MDC} mappings provider to use in JDA.
      * <br>If sharding is enabled JDA will automatically add a {@code jda.shard} context with the format {@code [SHARD_ID / TOTAL]}
      * where {@code SHARD_ID} and {@code TOTAL} are the shard configuration.
@@ -1010,24 +1007,6 @@ public class  DefaultShardManagerBuilder
         Checks.noneNull(listenerProviders, "listener providers");
 
         this.listenerProviders.removeAll(listenerProviders);
-        return this;
-    }
-
-    /**
-     * Changes the factory used to create {@link net.dv8tion.jda.api.audio.factory.IAudioSendSystem IAudioSendSystem}
-     * objects which handle the sending loop for audio packets.
-     * <br>By default, JDA uses {@link net.dv8tion.jda.api.audio.factory.DefaultSendFactory DefaultSendFactory}.
-     *
-     * @param  factory
-     *         The new {@link net.dv8tion.jda.api.audio.factory.IAudioSendFactory IAudioSendFactory} to be used
-     *         when creating new {@link net.dv8tion.jda.api.audio.factory.IAudioSendSystem} objects.
-     *
-     * @return The DefaultShardManagerBuilder instance. Useful for chaining.
-     */
-    @Nonnull
-    public DefaultShardManagerBuilder setAudioSendFactory(@Nullable final IAudioSendFactory factory)
-    {
-        this.audioSendFactory = factory;
         return this;
     }
 
@@ -2297,7 +2276,7 @@ public class  DefaultShardManagerBuilder
         presenceConfig.setStatusProvider(statusProvider);
         presenceConfig.setIdleProvider(idleProvider);
         final ThreadingProviderConfig threadingConfig = new ThreadingProviderConfig(rateLimitSchedulerProvider, rateLimitElasticProvider, gatewayPoolProvider, callbackPoolProvider, eventPoolProvider, audioPoolProvider, threadFactory);
-        final ShardingSessionConfig sessionConfig = new ShardingSessionConfig(sessionController, voiceDispatchInterceptor, httpClient, httpClientBuilder, wsFactory, audioSendFactory, flags, shardingFlags, maxReconnectDelay, largeThreshold);
+        final ShardingSessionConfig sessionConfig = new ShardingSessionConfig(sessionController, httpClient, httpClientBuilder, wsFactory, flags, shardingFlags, maxReconnectDelay, largeThreshold);
         final ShardingMetaConfig metaConfig = new ShardingMetaConfig(maxBufferSize, contextProvider, cacheFlags, flags, compression, encoding);
         final DefaultShardManager manager = new DefaultShardManager(this.token, this.shards, shardingConfig, eventConfig, presenceConfig, threadingConfig, sessionConfig, metaConfig, restConfigProvider, chunkingFilter);
 

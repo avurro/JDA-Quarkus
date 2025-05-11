@@ -85,11 +85,11 @@ if (shouldPublish) {
     project.version = "${versionObj}_$commitHash"
 }
 
-project.group = "net.dv8tion"
+project.group = "com.nextlevel-italia"
 
 
 base {
-    archivesName.set("JDA")
+    archivesName.set("jda-no-audio")
 }
 
 java {

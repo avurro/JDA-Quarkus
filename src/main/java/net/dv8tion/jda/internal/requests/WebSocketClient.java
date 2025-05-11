@@ -16,47 +16,6 @@
 
 package net.dv8tion.jda.internal.requests;
 
-import com.neovisionaries.ws.client.*;
-import gnu.trove.iterator.TLongObjectIterator;
-import gnu.trove.map.TLongObjectMap;
-import net.dv8tion.jda.api.GatewayEncoding;
-import net.dv8tion.jda.api.JDA;
-import net.dv8tion.jda.api.JDAInfo;
-import net.dv8tion.jda.api.Permission;
-import net.dv8tion.jda.api.audio.hooks.ConnectionListener;
-import net.dv8tion.jda.api.audio.hooks.ConnectionStatus;
-import net.dv8tion.jda.api.entities.Guild;
-import net.dv8tion.jda.api.entities.channel.middleman.AudioChannel;
-import net.dv8tion.jda.api.events.ExceptionEvent;
-import net.dv8tion.jda.api.events.RawGatewayEvent;
-import net.dv8tion.jda.api.events.session.*;
-import net.dv8tion.jda.api.exceptions.ParsingException;
-import net.dv8tion.jda.api.managers.AudioManager;
-import net.dv8tion.jda.api.requests.CloseCode;
-import net.dv8tion.jda.api.utils.Compression;
-import net.dv8tion.jda.api.utils.MiscUtil;
-import net.dv8tion.jda.api.utils.SessionController;
-import net.dv8tion.jda.api.utils.data.DataArray;
-import net.dv8tion.jda.api.utils.data.DataObject;
-import net.dv8tion.jda.api.utils.data.DataType;
-import net.dv8tion.jda.internal.JDAImpl;
-import net.dv8tion.jda.internal.audio.ConnectionRequest;
-import net.dv8tion.jda.internal.audio.ConnectionStage;
-import net.dv8tion.jda.internal.entities.GuildImpl;
-import net.dv8tion.jda.internal.handle.*;
-import net.dv8tion.jda.internal.managers.AudioManagerImpl;
-import net.dv8tion.jda.internal.managers.PresenceImpl;
-import net.dv8tion.jda.internal.utils.IOUtil;
-import net.dv8tion.jda.internal.utils.JDALogger;
-import net.dv8tion.jda.internal.utils.ShutdownReason;
-import net.dv8tion.jda.internal.utils.UnlockHook;
-import net.dv8tion.jda.internal.utils.cache.AbstractCacheView;
-import net.dv8tion.jda.internal.utils.compress.Decompressor;
-import net.dv8tion.jda.internal.utils.compress.ZlibDecompressor;
-import org.slf4j.Logger;
-import org.slf4j.MDC;
-
-import javax.annotation.Nonnull;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.lang.ref.SoftReference;
@@ -65,15 +24,120 @@ import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Queue;
+import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.zip.DataFormatException;
+
+import javax.annotation.Nonnull;
+
+import org.slf4j.Logger;
+import org.slf4j.MDC;
+
+import com.neovisionaries.ws.client.ThreadType;
+import com.neovisionaries.ws.client.WebSocket;
+import com.neovisionaries.ws.client.WebSocketAdapter;
+import com.neovisionaries.ws.client.WebSocketException;
+import com.neovisionaries.ws.client.WebSocketFactory;
+import com.neovisionaries.ws.client.WebSocketFrame;
+import com.neovisionaries.ws.client.WebSocketListener;
+
+import gnu.trove.map.TLongObjectMap;
+import net.dv8tion.jda.api.GatewayEncoding;
+import net.dv8tion.jda.api.JDA;
+import net.dv8tion.jda.api.JDAInfo;
+import net.dv8tion.jda.api.events.ExceptionEvent;
+import net.dv8tion.jda.api.events.RawGatewayEvent;
+import net.dv8tion.jda.api.events.session.ReadyEvent;
+import net.dv8tion.jda.api.events.session.SessionDisconnectEvent;
+import net.dv8tion.jda.api.events.session.SessionInvalidateEvent;
+import net.dv8tion.jda.api.events.session.SessionRecreateEvent;
+import net.dv8tion.jda.api.events.session.SessionResumeEvent;
+import net.dv8tion.jda.api.events.session.ShutdownEvent;
+import net.dv8tion.jda.api.exceptions.ParsingException;
+import net.dv8tion.jda.api.requests.CloseCode;
+import net.dv8tion.jda.api.utils.Compression;
+import net.dv8tion.jda.api.utils.MiscUtil;
+import net.dv8tion.jda.api.utils.SessionController;
+import net.dv8tion.jda.api.utils.data.DataArray;
+import net.dv8tion.jda.api.utils.data.DataObject;
+import net.dv8tion.jda.api.utils.data.DataType;
+import net.dv8tion.jda.internal.JDAImpl;
+import net.dv8tion.jda.internal.handle.ApplicationCommandPermissionsUpdateHandler;
+import net.dv8tion.jda.internal.handle.AutoModExecutionHandler;
+import net.dv8tion.jda.internal.handle.AutoModRuleHandler;
+import net.dv8tion.jda.internal.handle.ChannelCreateHandler;
+import net.dv8tion.jda.internal.handle.ChannelDeleteHandler;
+import net.dv8tion.jda.internal.handle.ChannelUpdateHandler;
+import net.dv8tion.jda.internal.handle.EntitlementCreateHandler;
+import net.dv8tion.jda.internal.handle.EntitlementDeleteHandler;
+import net.dv8tion.jda.internal.handle.EntitlementUpdateHandler;
+import net.dv8tion.jda.internal.handle.EventCache;
+import net.dv8tion.jda.internal.handle.GuildAuditLogEntryCreateHandler;
+import net.dv8tion.jda.internal.handle.GuildBanHandler;
+import net.dv8tion.jda.internal.handle.GuildCreateHandler;
+import net.dv8tion.jda.internal.handle.GuildDeleteHandler;
+import net.dv8tion.jda.internal.handle.GuildEmojisUpdateHandler;
+import net.dv8tion.jda.internal.handle.GuildMemberAddHandler;
+import net.dv8tion.jda.internal.handle.GuildMemberRemoveHandler;
+import net.dv8tion.jda.internal.handle.GuildMemberUpdateHandler;
+import net.dv8tion.jda.internal.handle.GuildMembersChunkHandler;
+import net.dv8tion.jda.internal.handle.GuildRoleCreateHandler;
+import net.dv8tion.jda.internal.handle.GuildRoleDeleteHandler;
+import net.dv8tion.jda.internal.handle.GuildRoleUpdateHandler;
+import net.dv8tion.jda.internal.handle.GuildStickersUpdateHandler;
+import net.dv8tion.jda.internal.handle.GuildSyncHandler;
+import net.dv8tion.jda.internal.handle.GuildUpdateHandler;
+import net.dv8tion.jda.internal.handle.InteractionCreateHandler;
+import net.dv8tion.jda.internal.handle.InviteCreateHandler;
+import net.dv8tion.jda.internal.handle.InviteDeleteHandler;
+import net.dv8tion.jda.internal.handle.MessageBulkDeleteHandler;
+import net.dv8tion.jda.internal.handle.MessageCreateHandler;
+import net.dv8tion.jda.internal.handle.MessageDeleteHandler;
+import net.dv8tion.jda.internal.handle.MessagePollVoteHandler;
+import net.dv8tion.jda.internal.handle.MessageReactionBulkRemoveHandler;
+import net.dv8tion.jda.internal.handle.MessageReactionClearEmojiHandler;
+import net.dv8tion.jda.internal.handle.MessageReactionHandler;
+import net.dv8tion.jda.internal.handle.MessageUpdateHandler;
+import net.dv8tion.jda.internal.handle.PresenceUpdateHandler;
+import net.dv8tion.jda.internal.handle.ReadyHandler;
+import net.dv8tion.jda.internal.handle.ScheduledEventCreateHandler;
+import net.dv8tion.jda.internal.handle.ScheduledEventDeleteHandler;
+import net.dv8tion.jda.internal.handle.ScheduledEventUpdateHandler;
+import net.dv8tion.jda.internal.handle.ScheduledEventUserHandler;
+import net.dv8tion.jda.internal.handle.SocketHandler;
+import net.dv8tion.jda.internal.handle.StageInstanceCreateHandler;
+import net.dv8tion.jda.internal.handle.StageInstanceDeleteHandler;
+import net.dv8tion.jda.internal.handle.StageInstanceUpdateHandler;
+import net.dv8tion.jda.internal.handle.ThreadCreateHandler;
+import net.dv8tion.jda.internal.handle.ThreadDeleteHandler;
+import net.dv8tion.jda.internal.handle.ThreadListSyncHandler;
+import net.dv8tion.jda.internal.handle.ThreadMemberUpdateHandler;
+import net.dv8tion.jda.internal.handle.ThreadMembersUpdateHandler;
+import net.dv8tion.jda.internal.handle.ThreadUpdateHandler;
+import net.dv8tion.jda.internal.handle.TypingStartHandler;
+import net.dv8tion.jda.internal.handle.UserUpdateHandler;
+import net.dv8tion.jda.internal.managers.PresenceImpl;
+import net.dv8tion.jda.internal.utils.IOUtil;
+import net.dv8tion.jda.internal.utils.JDALogger;
+import net.dv8tion.jda.internal.utils.ShutdownReason;
+import net.dv8tion.jda.internal.utils.compress.Decompressor;
+import net.dv8tion.jda.internal.utils.compress.ZlibDecompressor;
 
 public class WebSocketClient extends WebSocketAdapter implements WebSocketListener
 {
@@ -113,7 +177,6 @@ public class WebSocketClient extends WebSocketAdapter implements WebSocketListen
     protected long heartbeatStartTime;
     protected long identifyTime = 0;
 
-    protected final TLongObjectMap<ConnectionRequest> queuedAudioConnections = MiscUtil.newLongMap();
     protected final Queue<DataObject> chunkSyncQueue = new ConcurrentLinkedQueue<>();
     protected final Queue<DataObject> ratelimitQueue = new ConcurrentLinkedQueue<>();
 
@@ -212,7 +275,6 @@ public class WebSocketClient extends WebSocketAdapter implements WebSocketListen
             }
             else
             {
-                updateAudioManagerReferences();
                 JDAImpl.LOG.info("Finished (Re)Loading!");
                 api.handleEvent(new SessionRecreateEvent(api));
             }
@@ -286,7 +348,7 @@ public class WebSocketClient extends WebSocketAdapter implements WebSocketListen
             if (!printedRateLimitMessage)
             {
                 LOG.warn("Hit the WebSocket RateLimit! This can be caused by too many presence or voice status updates (connect/disconnect/mute/deaf). " +
-                         "Regular: {} Voice: {} Chunking: {}", ratelimitQueue.size(), queuedAudioConnections.size(), chunkSyncQueue.size());
+                         "Regular: {} Chunking: {}", ratelimitQueue.size(), chunkSyncQueue.size());
                 printedRateLimitMessage = true;
             }
             return false;
@@ -812,33 +874,6 @@ public class WebSocketClient extends WebSocketAdapter implements WebSocketListen
         api.handleEvent(new SessionInvalidateEvent(api));
     }
 
-    protected void updateAudioManagerReferences()
-    {
-        AbstractCacheView<AudioManager> managerView = api.getAudioManagersView();
-        try (UnlockHook hook = managerView.writeLock())
-        {
-            final TLongObjectMap<AudioManager> managerMap = managerView.getMap();
-            if (managerMap.size() > 0)
-                LOG.trace("Updating AudioManager references");
-
-            for (TLongObjectIterator<AudioManager> it = managerMap.iterator(); it.hasNext(); )
-            {
-                it.advance();
-                final long guildId = it.key();
-                final AudioManagerImpl mng = (AudioManagerImpl) it.value();
-
-                GuildImpl guild = (GuildImpl) api.getGuildById(guildId);
-                if (guild == null)
-                {
-                    //We no longer have access to the guild that this audio manager was for. Set the value to null.
-                    queuedAudioConnections.remove(guildId);
-                    mng.closeAudioConnection(ConnectionStatus.DISCONNECTED_REMOVED_DURING_RECONNECT);
-                    it.remove();
-                }
-            }
-        }
-    }
-
     protected String getToken()
     {
         // all bot tokens are prefixed with "Bot "
@@ -1168,181 +1203,9 @@ public class WebSocketClient extends WebSocketAdapter implements WebSocketListen
         }
     }
 
-    public void queueAudioReconnect(AudioChannel channel)
-    {
-        locked("There was an error queueing the audio reconnect", () ->
-        {
-            final long guildId = channel.getGuild().getIdLong();
-            ConnectionRequest request = queuedAudioConnections.get(guildId);
-
-            if (request == null)
-            {
-                // If no request, then just reconnect
-                request = new ConnectionRequest(channel, ConnectionStage.RECONNECT);
-                queuedAudioConnections.put(guildId, request);
-            }
-            else
-            {
-                // If there is a request we change it to reconnect, no matter what it is
-                request.setStage(ConnectionStage.RECONNECT);
-            }
-            // in all cases, update to this channel
-            request.setChannel(channel);
-        });
-    }
-
-    public void queueAudioConnect(AudioChannel channel)
-    {
-        locked("There was an error queueing the audio connect", () ->
-        {
-            final long guildId = channel.getGuild().getIdLong();
-            ConnectionRequest request = queuedAudioConnections.get(guildId);
-
-            if (request == null)
-            {
-                // starting a whole new connection
-                request = new ConnectionRequest(channel, ConnectionStage.CONNECT);
-                queuedAudioConnections.put(guildId, request);
-            }
-            else if (request.getStage() == ConnectionStage.DISCONNECT)
-            {
-                // if planned to disconnect, we want to reconnect
-                request.setStage(ConnectionStage.RECONNECT);
-            }
-
-            // in all cases, update to this channel
-            request.setChannel(channel);
-        });
-    }
-
-    public void queueAudioDisconnect(Guild guild)
-    {
-        locked("There was an error queueing the audio disconnect", () ->
-        {
-            final long guildId = guild.getIdLong();
-            ConnectionRequest request = queuedAudioConnections.get(guildId);
-
-            if (request == null)
-            {
-                // If we do not have a request
-                queuedAudioConnections.put(guildId, new ConnectionRequest(guild));
-            }
-            else
-            {
-                // If we have a request, change to DISCONNECT
-                request.setStage(ConnectionStage.DISCONNECT);
-            }
-        });
-    }
-
-    public ConnectionRequest removeAudioConnection(long guildId)
-    {
-        //This will only be used by GuildDeleteHandler to ensure that
-        // no further voice state updates are sent for this Guild
-        return locked("There was an error cleaning up audio connections for deleted guild", () -> queuedAudioConnections.remove(guildId));
-    }
-
-    public ConnectionRequest updateAudioConnection(long guildId, AudioChannel connectedChannel)
-    {
-        return locked("There was an error updating the audio connection", () -> updateAudioConnection0(guildId, connectedChannel));
-    }
-
-    public ConnectionRequest updateAudioConnection0(long guildId, AudioChannel connectedChannel)
-    {
-        //Called by VoiceStateUpdateHandler when we receive a response from discord
-        // about our request to CONNECT or DISCONNECT.
-        // "stage" should never be RECONNECT here thus we don't check for that case
-        ConnectionRequest request = queuedAudioConnections.get(guildId);
-
-        if (request == null)
-            return null;
-        ConnectionStage requestStage = request.getStage();
-        if (connectedChannel == null)
-        {
-            //If we got an update that DISCONNECT happened
-            // -> If it was on RECONNECT we now switch to CONNECT
-            // -> If it was on DISCONNECT we can now remove it
-            // -> Otherwise we ignore it
-            switch (requestStage)
-            {
-                case DISCONNECT:
-                    return queuedAudioConnections.remove(guildId);
-                case RECONNECT:
-                    request.setStage(ConnectionStage.CONNECT);
-                    request.setNextAttemptEpoch(System.currentTimeMillis());
-                default:
-                    return null;
-            }
-        }
-        else if (requestStage == ConnectionStage.CONNECT)
-        {
-            //If the removeRequest was related to a channel that isn't the currently queued
-            // request, then don't remove it.
-            if (request.getChannelId() == connectedChannel.getIdLong())
-                return queuedAudioConnections.remove(guildId);
-        }
-        //If the channel is not the one we are looking for!
-        return null;
-    }
-
     private SoftReference<ByteArrayOutputStream> newDecompressBuffer()
     {
         return new SoftReference<>(new ByteArrayOutputStream(1024));
-    }
-
-    protected ConnectionRequest getNextAudioConnectRequest()
-    {
-        //Don't try to setup audio connections before JDA has finished loading.
-        if (sessionId == null)
-            return null;
-
-        long now = System.currentTimeMillis();
-        AtomicReference<ConnectionRequest> request = new AtomicReference<>();
-        queuedAudioConnections.retainEntries((guildId, audioRequest) -> // we use this because it locks the mutex
-        {
-            if (audioRequest.getNextAttemptEpoch() < now)
-            {
-                // Check if the guild is ready
-                Guild guild = api.getGuildById(guildId);
-                if (guild == null)
-                {
-                    // Not yet ready, check if the guild is known to this shard
-                    GuildSetupController controller = api.getGuildSetupController();
-                    if (!controller.isKnown(guildId))
-                    {
-                        // The guild is not tracked anymore -> we can't connect the audio channel
-                        LOG.debug("Removing audio connection request because the guild has been removed. {}", audioRequest);
-                        return false;
-                    }
-                    return true;
-                }
-
-                ConnectionListener listener = guild.getAudioManager().getConnectionListener();
-                if (audioRequest.getStage() != ConnectionStage.DISCONNECT)
-                {
-                    // Check if we can connect to the target channel
-                    AudioChannel channel = (AudioChannel) guild.getGuildChannelById(audioRequest.getChannelId());
-                    if (channel == null)
-                    {
-                        if (listener != null)
-                            listener.onStatusChange(ConnectionStatus.DISCONNECTED_CHANNEL_DELETED);
-                        return false;
-                    }
-
-                    if (!guild.getSelfMember().hasPermission(channel, Permission.VOICE_CONNECT))
-                    {
-                        if (listener != null)
-                            listener.onStatusChange(ConnectionStatus.DISCONNECTED_LOST_PERMISSION);
-                        return false;
-                    }
-                }
-                // This will take the first result
-                request.compareAndSet(null, audioRequest);
-            }
-            return true;
-        });
-
-        return request.get();
     }
 
     public Map<String, SocketHandler> getHandlers()
@@ -1424,9 +1287,6 @@ public class WebSocketClient extends WebSocketAdapter implements WebSocketListen
         handlers.put("THREAD_UPDATE",                          new ThreadUpdateHandler(api));
         handlers.put("TYPING_START",                           new TypingStartHandler(api));
         handlers.put("USER_UPDATE",                            new UserUpdateHandler(api));
-        handlers.put("VOICE_SERVER_UPDATE",                    new VoiceServerUpdateHandler(api));
-        handlers.put("VOICE_STATE_UPDATE",                     new VoiceStateUpdateHandler(api));
-        handlers.put("VOICE_CHANNEL_STATUS_UPDATE",            new VoiceChannelStatusUpdateHandler(api));
 
         // Unused events
         handlers.put("CHANNEL_PINS_ACK",          nopHandler);
