@@ -55,19 +55,24 @@ public class CommandEditActionImpl extends RestActionImpl<Command> implements Co
     private static final int INTERACTION_CONTEXTS_SET = 1 << 6;
     private static final int INTEGRATION_TYPES_SET    = 1 << 7;
     private final Guild guild;
-    private int mask = 0;
-    private CommandDataImpl data = new CommandDataImpl(UNDEFINED, UNDEFINED);
 
-    public CommandEditActionImpl(JDA api, String id)
+    private int mask;
+    private CommandDataImpl data;
+
+    public CommandEditActionImpl(JDA api, Command.Type type, String id)
     {
         super(api, Route.Interactions.EDIT_COMMAND.compile(api.getSelfUser().getApplicationId(), id));
         this.guild = null;
+        this.data = CommandDataImpl.of(type, UNDEFINED, UNDEFINED);
+        this.reset();
     }
 
-    public CommandEditActionImpl(Guild guild, String id)
+    public CommandEditActionImpl(Guild guild, Command.Type type, String id)
     {
         super(guild.getJDA(), Route.Interactions.EDIT_GUILD_COMMAND.compile(guild.getJDA().getSelfUser().getApplicationId(), guild.getId(), id));
         this.guild = guild;
+        this.data = CommandDataImpl.of(type, UNDEFINED, UNDEFINED);
+        this.reset();
     }
 
     @Nonnull
@@ -185,8 +190,8 @@ public class CommandEditActionImpl extends RestActionImpl<Command> implements Co
     @Override
     public CommandEditAction clearOptions()
     {
-        data = new CommandDataImpl(data.getName(), data.getDescription());
-        mask &= ~OPTIONS_SET;
+        data.removeAllOptions();
+        mask |= OPTIONS_SET;
         return this;
     }
 
@@ -242,8 +247,7 @@ public class CommandEditActionImpl extends RestActionImpl<Command> implements Co
             json.remove("contexts");
         if (isUnchanged(INTEGRATION_TYPES_SET))
             json.remove("integration_types");
-        mask = 0;
-        data = new CommandDataImpl(UNDEFINED, UNDEFINED);
+        reset();
         return getRequestBody(json);
     }
 
@@ -252,5 +256,11 @@ public class CommandEditActionImpl extends RestActionImpl<Command> implements Co
     {
         DataObject json = response.getObject();
         request.onSuccess(new CommandImpl(api, guild, json));
+    }
+
+    private void reset()
+    {
+        mask = 0;
+        data = CommandDataImpl.of(data.getType(), UNDEFINED, UNDEFINED);
     }
 }

@@ -116,7 +116,7 @@ public class DetachedGuildImpl implements Guild, IDetachableEntityMixin
 
     @Nonnull
     @Override
-    public CommandEditAction editCommandById(@Nonnull String id)
+    public CommandEditAction editCommandById(@Nonnull Command.Type type, @Nonnull String id)
     {
         throw detachedException();
     }
@@ -714,7 +714,7 @@ public class DetachedGuildImpl implements Guild, IDetachableEntityMixin
 
     @Nonnull
     @Override
-    public RestAction<GuildVoiceState> retrieveMemberVoiceStateById(long id)
+    public CacheRestAction<GuildVoiceState> retrieveMemberVoiceStateById(long id)
     {
         throw detachedException();
     }

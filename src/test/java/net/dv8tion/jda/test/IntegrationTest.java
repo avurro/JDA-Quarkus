@@ -19,6 +19,7 @@ package net.dv8tion.jda.test;
 import net.dv8tion.jda.api.requests.Request;
 import net.dv8tion.jda.api.requests.Response;
 import net.dv8tion.jda.api.requests.RestAction;
+import net.dv8tion.jda.api.utils.cache.CacheFlag;
 import net.dv8tion.jda.api.utils.data.DataArray;
 import net.dv8tion.jda.api.utils.data.DataObject;
 import net.dv8tion.jda.internal.JDAImpl;
@@ -33,6 +34,7 @@ import org.mockito.Mock;
 
 import javax.annotation.CheckReturnValue;
 import javax.annotation.Nonnull;
+import java.util.EnumSet;
 import java.util.Random;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
@@ -40,7 +42,7 @@ import java.util.function.Consumer;
 import static org.mockito.Mockito.*;
 import static org.mockito.MockitoAnnotations.openMocks;
 
-public class IntegrationTest
+public class IntegrationTest extends AbstractSnapshotTest
 {
     protected Random random = new Random();
     @Mock
@@ -83,7 +85,7 @@ public class IntegrationTest
     protected RestActionAssertions assertThatRequestFrom(@Nonnull RestAction<?> action)
     {
         expectedRequestCount += 1;
-        return RestActionAssertions.assertThatNextAction(requester, action)
+        return RestActionAssertions.assertThatNextAction(snapshotHandler, requester, action)
                 .withNormalizedBody(this::normalizeRequestBody);
     }
 
@@ -110,5 +112,10 @@ public class IntegrationTest
     protected String randomSnowflake()
     {
         return Long.toUnsignedString(random.nextLong());
+    }
+
+    protected void withCacheFlags(EnumSet<CacheFlag> flags)
+    {
+        when(jda.getCacheFlags()).thenReturn(flags);
     }
 }
